@@ -1,167 +1,107 @@
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local ServerStorage = game:GetService("ServerStorage")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local DataStoreService = game:GetService("DataStoreService")
 
-local DashRequest = ReplicatedStorage:WaitForChild("RemoteEvents"):WaitForChild("DashRequest")
-local AbilityEvent = ReplicatedStorage:WaitForChild("RemoteEvents"):WaitForChild("AbilityEvent")
-local VFXEvent = ReplicatedStorage:WaitForChild("RemoteEvents"):WaitForChild("VFXEvent")
-local Abilities = require(script.Parent:WaitForChild("Abilities"))
+local ElementStore = DataStoreService:GetDataStore("PlayerElement")
 
-local AbilityModels = ServerStorage:WaitForChild("AbilityModels")
+local SpawnRequest = ReplicatedStorage:WaitForChild("RemoteEvents"):WaitForChild("SpawnRequest")
+local SetElement = ReplicatedStorage:WaitForChild("RemoteEvents"):WaitForChild("SetElement")
+local spawnPointsFolder = workspace:WaitForChild("SpawnPoints")
 
-local playerData = {}
+local function GetRandomSpawn()
 
-local maxDashes = 2
-local rechargeTime = 4
-local useCooldown = 1
+	local spawnPoints = spawnPointsFolder:GetChildren()
 
-local dashDistance = 40
-local dashTime = 0.1
+	return spawnPoints[math.random(1, #spawnPoints)]
 
-Players.PlayerAdded:connect(function(player)
+end
 
-	playerData[player] = {
+local function SpawnPlayer(player)
 
-		dashes = maxDashes,
+	local character = player.Character or player.CharacterAdded:Wait()
 
-		lastUse = 0,
+	local spawnPoint = GetRandomSpawn()
 
-		lastRecharge = workspace:GetServerTimeNow()
-	}
+	local _, size = character:GetBoundingBox()
 
-	player:SetAttribute("Dashes", maxDashes)
+	local height = size.Y
 
-end)
+	character:PivotTo(spawnPoint.CFrame + Vector3.new(0, height / 2, 0))
 
-Players.PlayerRemoving:connect(function(player)
+end
 
-	playerData[player] = nil
+SpawnRequest.OnServerEvent:Connect(function(player)
+
+	SpawnPlayer(player)
 
 end)
 
-RunService.Heartbeat:Connect(function()
+local function OnCharacterAdded(player, character)
 
-	for player, data in playerData do
+	local humanoid = character:WaitForChild("Humanoid")
 
-		if data.dashes < maxDashes then
+	SpawnRequest:FireClient(player, "ShowMenu")
 
-			local now = workspace:GetServerTimeNow()
+	humanoid.JumpHeight = 10
 
-			if now - data.lastRecharge >= rechargeTime then
+	humanoid.WalkSpeed = 25
 
-				data.dashes += 1
-				data.lastRecharge = now
+	humanoid.Died:Connect(function()
 
-				player:SetAttribute("Dashes", data.dashes)
-
-				if data.dashes < maxDashes then
-
-					player:SetAttribute("DashRechargeEnd", now + rechargeTime)
-
-				else
-
-					player:SetAttribute("DashRechargeEnd", nil)
-
-				end
-
-			end
-		end
-	end
-end)
-
-
-DashRequest.OnServerEvent:Connect(function(player)
-
-	local data = playerData[player]
-	if not data then return end
-
-	local now = workspace:GetServerTimeNow()
-
-	if now - data.lastUse < useCooldown then
-		return
-	end
-
-	if data.dashes <= 0 then
-		return
-	end
-
-	local character = player.Character
-	if not character then return end
-
-	local humanoid = character:FindFirstChild("Humanoid")
-
-	local root = character:FindFirstChild("HumanoidRootPart")
-	if not humanoid or not root then return end
-
-	VFXEvent:FireClient(player, "Dash")
-
-	local moveDirection = humanoid.MoveDirection
-
-	local direction = moveDirection.Magnitude > 0 and moveDirection.Unit or root.CFrame.LookVector
-
-	local dashSpeed = dashDistance / dashTime
-
-	local startTime = workspace:GetServerTimeNow()
-
-	local connection
-
-	connection = RunService.Heartbeat:Connect(function(dt)
-
-		local elapsed = workspace:GetServerTimeNow() - startTime
-
-		if elapsed >= dashTime then
-
-			connection:Disconnect()
-
-			root.AssemblyLinearVelocity = Vector3.zero
-
-			return
-		end
-
-		root.CFrame = root.CFrame + direction * dashSpeed * dt
+		-- stuff for death screen mabye?
 
 	end)
 
-	data.dashes -= 1
+end
 
-	data.lastUse = now
+Players.PlayerAdded:Connect(function(player)
 
-	if data.dashes == maxDashes - 1 then
+	local success, savedElement = pcall(function()
 
-		data.lastRecharge = now
+		return ElementStore:GetAsync(player.UserId)
 
+	end)
+
+	if success and savedElement then
+
+		player:SetAttribute("Element", savedElement)
+
+	else
+
+		player:SetAttribute("Element", "Earth")
+		
 	end
 
-	player:SetAttribute("Dashes", data.dashes)
+	player.CharacterAdded:Connect(function(character)
 
-	player:SetAttribute("DashRechargeEnd", data.lastRecharge + rechargeTime)
+		OnCharacterAdded(player, character)
+
+	end)
 
 end)
 
 
+SetElement.OnServerEvent:Connect(function(player, elementName)
 
-AbilityEvent.OnServerEvent:Connect(function(player, abilityKey, mousePos, clientCFrame)
+	if elementName ~= "Fire" and elementName ~= "Water" and elementName ~= "Earth" then
 
-	local character = player.Character
-	local humanoid = character:FindFirstChild("Humanoid")
-	if not character then return end
-	
-	if not humanoid or humanoid.Health <= 0 then
 		return
+
 	end
+
+	player:SetAttribute("Element", elementName)
+
+
+end)
+
+Players.PlayerRemoving:Connect(function(player)
 
 	local element = player:GetAttribute("Element")
-	if not element then return end
 
-	local elementAbilities = Abilities[element]
-	if not elementAbilities then return end
-
-	local AbilityFunction = elementAbilities[abilityKey]
-	if not AbilityFunction then return end
-
-	AbilityFunction(player, character, mousePos, clientCFrame)
+	pcall(function()
+		
+		ElementStore:SetAsync(player.UserId, element)
+		
+	end)
 
 end)
-
-
